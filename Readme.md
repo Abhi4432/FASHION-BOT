@@ -1,0 +1,1 @@
+This is a bot for creation of fashion using myntra fashion dataset. The bot reviews the user demands and provides answers.

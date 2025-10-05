@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+streamlit
+langchain
+langchain-community
+langchain-openai
+langgraph
+python-dotenv
+sqlite-utils
+pandas
+numpy
+bs4
+faker
+ollama
+langchain-ollama
