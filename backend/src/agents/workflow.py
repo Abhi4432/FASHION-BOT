@@ -7,10 +7,10 @@ from src.agents.router_node import router_node
 from src.agents.viewer_node import viewer_node
 from src.agents.error_node import error_node
 from src.agents.none_node import none_node
-
+from src.agents.recommendation_node import recommendation_node # ADDED IMPORT
 
 # -------------------------------
-# Define shared State type
+# Define shared State type (Remains the same)
 # -------------------------------
 class State(TypedDict):
     messages: list
@@ -23,12 +23,13 @@ class State(TypedDict):
 
 # -------------------------------
 # Build graph
-# -------------------------------
+# ------------------------------
 workflow = StateGraph(State)
 
 # Add all nodes
 workflow.add_node("router", router_node)
 workflow.add_node("Viewer", viewer_node)
+workflow.add_node("RecommendationHandler", recommendation_node) # ADDED NODE
 workflow.add_node("ErrorHandler", error_node)
 workflow.add_node("NoneHandler", none_node)
 
@@ -40,6 +41,8 @@ def router_selector(state: State):
     intent = state.get("intent")
     if intent == "details":
         return "Viewer"
+    elif intent == "recommendation": # ADDED CONDITION
+        return "RecommendationHandler"
     elif intent == "none":
         return "NoneHandler"
     else:
@@ -62,10 +65,20 @@ workflow.add_conditional_edges(
     viewer_outcome
 )
 
+# Conditional edges from RecommendationHandler # ADDED BLOCK
+def reco_outcome(state: State):
+    if state.get("error_msg"):
+        return "ErrorHandler"
+    else:
+        return END
+        
+workflow.add_conditional_edges(
+    "RecommendationHandler", 
+    reco_outcome
+)
+
 # From error or none → END
 workflow.add_edge("ErrorHandler", END)
 workflow.add_edge("NoneHandler", END)
 
 workflow = workflow.compile()
-
-print("✅ Workflow compiled successfully.")
