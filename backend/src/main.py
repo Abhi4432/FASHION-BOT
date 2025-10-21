@@ -3,8 +3,8 @@ import hashlib
 import os
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List
-from src.agents.workflow import workflow  # make sure agents folder has __init__.py
+from typing import List, Dict, Any # ADDED Dict, Any
+from src.agents.workflow import workflow
 
 # DB path (adjust according to your folder structure)
 DB_PATH = os.path.abspath("data/fashion_ai.db") 
@@ -21,9 +21,11 @@ class Message(BaseModel):
 class StateRequest(BaseModel):
     messages: List[Message]
     user_id: int
+    relevant_data: Dict[str, Any] = {} # FIX 1: Accept incoming relevant_data
 
 class StateResponse(BaseModel):
     messages: List[Message]
+    relevant_data: Dict[str, Any]      # FIX 2: Return updated relevant_data
 
 class LoginRequest(BaseModel):
     username_or_email: str
@@ -75,18 +77,17 @@ async def chat_endpoint(req: StateRequest):
     """
     state = {
         "messages": [m.dict() for m in req.messages],
-        "user_id": req.user_id  # Store as string for consistency
+        "user_id": req.user_id,
+        "relevant_data": req.relevant_data # FIX 3: Pass incoming relevant_data to LangGraph state
     }
     user_messages = [m for m in req.messages if m.role == "user"]
     state["latest_input"] = user_messages[-1].content if user_messages else ""
+    
     updated_state = workflow.invoke(state)
-    print(updated_state , "\n")
-    def to_message(m):
-        if isinstance(m, dict):
-            return Message(**m)
-        return Message(role=getattr(m, "role", "user"), content=getattr(m, "content", ""))
+    
+    # FIX 4: Return the final state, including the fully updated relevant_data
     return {
-        "messages": [to_message(m) for m in updated_state["messages"]]
+        "messages": [Message(**m) for m in updated_state["messages"]],
+        "relevant_data": updated_state.get("relevant_data", {}) 
     }
-
 

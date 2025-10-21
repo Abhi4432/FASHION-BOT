@@ -12,4 +12,6 @@ numpy
 bs4
 faker
 ollama
-langchain-ollama
+langchain-ollama 
+IPython
+json
