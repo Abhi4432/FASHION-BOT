@@ -7,21 +7,20 @@ import re
 
 ollama_model = ChatOllama(model="gemma:2b")
 
-# ---------- Schema ----------
+# ---------- Schema for Relevant Data ----------
 class RelevantData(BaseModel):
-    order_id: str | None = Field(None)
-    product_id: str | None = Field(None)
+    order_id: str | None = Field(None, description="The ID of an order the user is asking about. It will be numeric. It will be less than 1000")
+    product_id: str | None = Field(None, description="The ID of a product the user is asking about or viewing. It will be numeric in nature .It will be more than 10000")
     name: str | None = Field(None)
     brand: str | None = Field(None)
     colour: str | None = Field(None)
-    fabric: str | None = Field(None)
     occasion: str | None = Field(None)
-    print_pattern: str | None = Field(None)
     top_type: str | None = Field(None)
-    sleeve_length: str | None = Field(None)
-    description: str | None = Field(None)
+    description: str | None = Field(None, description="A general description of the desired product.")
 
-parser = PydanticOutputParser(pydantic_object=RelevantData)
+# Pydantic Parser for RelevantData extraction
+data_parser = PydanticOutputParser(pydantic_object=RelevantData)
+
 
 def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
     user_input = state.get("latest_input", "").strip()
@@ -31,112 +30,132 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
     prev_relevant_data = state.get("relevant_data", {})
     
     # Text summary of previous context to help the LLM prioritize
-    context_summary = "\n".join([f"{k}: {v}" for k, v in prev_relevant_data.items() if k not in ['type', 'user_id', 'img']])
+    # Exclude search_keywords as they are intermediate data for a recommendation node
+    context_summary = "\n".join([f"{k}: {v}" for k, v in prev_relevant_data.items() if k not in ['type', 'img', 'error_msg', 'search_keywords']])
 
+    # ------------------------------------
+    # --- STEP 1: Intent Classification (First LLM Call) ---
+    # ------------------------------------
     routing_prompt = f"""
-    Previous Context (Product or Order Info):
-    ---
-    {context_summary or "No previous order/product context found."}
-    ---
+    Analyze the user's latest input and previous context to determine their primary intent.
 
-    User's New Query: "{user_input}"
-
-    Step 1: Determine the INTENT based **ONLY on the User's New Query**.
+    Previous Context (Relevant Data):
+    {context_summary or 'None'}
     
-    INTENT RULES:
-    1. **"details"**: Select this if the user is asking about an **EXISTING entity**.
-       - Examples: "What is the status of order 1?", "Show me the price of product 19135002.", "What is the delivery date?", "Show me the image for the red dress."
-       - **Crucial:** Even if the context is present, if the user asks a question like "What is the status?", the intent is still "details" for retrieval.
-
-    2. **"recommendation"**: Select this if the user is asking for **NEW, SIMILAR, or suggested products**.
-       - Examples: "Show some kurti in red", "Find products similar to what I ordered.", "What's good in black?", "Show me a formal shirt."
-       - **Crucial:** Queries that specify new product attributes (like "red" or "kurti") that require a database search for NEW items must be "recommendation."
-
-    3. **"none"**: For greetings, farewells, or irrelevant topics.
-
-    Step 2: Extract Relevant Data
-    - Extract any product attributes mentioned in the User's New Query (e.g., colour, top_type).
-    - If the user explicitly mentions an `order_id` or `product_id`, extract that as well.
-
-    Return ONLY a single JSON object.
+    User's Latest Input: "{user_input}"
     
-    Example 1 (Recommendation):
-    User Query: "can you show some kurti in red"
-    Output:
-    {{
-      "intent": "recommendation",
-      "relevant_data": {{
-          "colour": "Red",
-          "top_type": "kurti"
-      }}
-    }}
+    Determine the primary intent. Choose only one from the following:
+    - "order" if user asks for status, tracking, or details of a specific order.
+    - "product" if user wants product details, description, or features of a specific product.
+    - "recommendation" if user asks for similar items or suggestions.
+    - "none" otherwise.
 
-    Example 2 (Details):
-    User Query: "what is the shipping date for order 1"
-    Output:
-    {{
-      "intent": "details",
-      "relevant_data": {{
-          "order_id": "1"
-      }}
-    }}
+    IMPORTANT: Return only one word: order, product, recommendation, or none.
     """
 
     llm_response = ollama_model.invoke(routing_prompt)
-    extracted_data = {}
-    
-    try:
-        # 1. Robustly parse the entire JSON object from the LLM
-        full_output = json.loads(llm_response.content.strip())
-        intent = full_output.get("intent", "none")
-        relevant_data_content = full_output.get("relevant_data", {})
+    raw_intent = llm_response.content.strip().lower()
+
+    # FIX: Robust post-process to guarantee valid output and map to workflow intents
+    if "recommendation" in raw_intent:
+        intent = "recommendation"
+    elif "order" in raw_intent or "product" in raw_intent:
+        intent = "details" # Maps 'order' or 'product' to the workflow's 'details' node (Viewer)
+    else:
+        intent = "none"
+
+    state["intent"] = intent
+    print(f"DEBUG: Intent set to: {intent} (from raw: {raw_intent})")
+
+    # ------------------------------------
+    # --- STEP 2: Relevant Data Extraction (Second LLM Call using Pydantic) ---
+    # ------------------------------------
+    extracted_data_dict = {}
+    if intent != "none":
         
-        # 2. Validate data structure and filter None/empty strings
-        parsed_relevant_data = parser.parse_obj(relevant_data_content)
+        extraction_prompt = f"""
+        Extract any relevant data (IDs and product descriptors) from the user's latest input.
         
-        extracted_data = {
-            "intent": intent,
-            "relevant_data": parsed_relevant_data.dict(exclude_none=True)
-        }
+        Previous Context (Relevant Data):
+        {context_summary or 'None'}
         
-    except Exception as e:
-        # --- DATA EXTRACTION FALLBACK (CRITICAL FIX) ---
-        print(f"❌ Pydantic Data Parsing failed: {e}. Falling back to Context/Regex...")
+        User's Latest Input: "{user_input}"
         
-        newly_extracted_data_for_merge = dict(prev_relevant_data)
+        The intent is determined to be '{intent}'. 
+        Focus your extraction on fields relevant to this intent.
+        Do not extract irrelevant data for fields where you feel no data is present in the user input. Keep them as none. 
+        Use the following format for your output:
         
+        {data_parser.get_format_instructions()}
+        
+        Output only the JSON object.
+        """
+        
+        try:
+            llm_response_data = ollama_model.invoke(extraction_prompt)
+            # Clean up the LLM output to handle markdown 'json' blocks
+            print(f"DEBUG: LLM response for data extraction: {llm_response_data.content}")
+            json_str = llm_response_data.content.strip()
+            if json_str.startswith("```json"):
+                json_str = json_str.strip("```json").strip("```").strip()
+            
+            extracted_data_dict = json.loads(json_str)
+            print(f"DEBUG: Extracted data from LLM: {extracted_data_dict}")
+            
+        except Exception as e:
+            # Pydantic extraction failed (e.g., malformed JSON). Continue with regex fallback.
+            print(f"ERROR: Pydantic extraction failed: {e}")
+            extracted_data_dict = {}
+        # Fallback ID extraction using regex for robustness
         user_input_lower = user_input.lower()
         if order_match := re.search(r"\b(?:order|id)\s*(\d+)\b", user_input_lower):
-            newly_extracted_data_for_merge["order_id"] = order_match.group(1)
-            
-        # Fallback Intent Logic (Prioritizes Recommendation)
-        if any(w in user_input_lower for w in ['similar', 'recommend', 'show me', 'find me', 'kurti', 'dress', 'shirt', 'good in']):
-            intent = "recommendation"
-        elif newly_extracted_data_for_merge.get('order_id') or newly_extracted_data_for_merge.get('product_id'):
-            # If an ID is present but no clear recommendation keywords, assume details
-            intent = "details"
-        else:
-            intent = "none"
-
-        extracted_data = {
-            "intent": intent,
-            "relevant_data": newly_extracted_data_for_merge
-        }
+            if 'order_id' not in extracted_data_dict or extracted_data_dict['order_id'] is None:
+                extracted_data_dict["order_id"] = order_match.group(1)
+        # Regex updated to include '.' for product IDs like '19135002.0'
+        if product_match := re.search(r"\b(?:pid|product|item)\s*([a-zA-Z0-9_\.-]+)\b", user_input_lower):
+            if 'product_id' not in extracted_data_dict or extracted_data_dict['product_id'] is None:
+                extracted_data_dict["product_id"] = product_match.group(1)
 
 
-    print(f"Extracted_data is here {extracted_data}")
-
-    state["intent"] = extracted_data.get("intent", "none")
-
-    # Combine previously stored relevant data with new extraction
+    # ------------------------------------
+    # --- STEP 3: Merge Context and Cleanup ---
+    # ------------------------------------
     merged_data = dict(prev_relevant_data)
 
-    for key, val in extracted_data['relevant_data'].items():
-        # Only overwrite if the new value is explicitly set and not empty
+    # 1. New extracted data (prioritized from user input) overwrites old context
+    for key, val in extracted_data_dict.items():
         if val is not None and str(val).strip() != "":
             merged_data[key] = val
-        # CRITICAL: Do not delete existing context fields unless overwritten by the user
+    
+    # 2. Context Persistence (IDs)
+    # If the new intent is 'details' and the user didn't provide a new ID, keep the old one.
+    if state["intent"] == "details":
+         if 'order_id' in prev_relevant_data and 'order_id' not in extracted_data_dict:
+             merged_data['order_id'] = prev_relevant_data['order_id']
+         if 'product_id' in prev_relevant_data and 'product_id' not in extracted_data_dict:
+             merged_data['product_id'] = prev_relevant_data['product_id']
+             
+    # 3. CRITICAL Context Cleanup for new Recommendation search
+    if state["intent"] == "recommendation":
+        # Define keys that are attributes/filters for search
+        PRODUCT_ATTRIBUTES = ['name', 'brand', 'colour', 'fabric', 'occasion', 'print_pattern', 'top_type', 'sleeve_length', 'description']
+        
+        # Collect all relevant search keywords from the newly merged data
+        search_keywords = []
+        for key in PRODUCT_ATTRIBUTES:
+            if key in merged_data and merged_data[key] is not None and str(merged_data[key]).strip() != "":
+                search_keywords.append(str(merged_data[key]))
+        
+        # Clear all order/detail-specific keys for a fresh recommendation search
+        keys_to_clear = ['order_id', 'product_id', 'status', 'delivery_date', 'shipping_date', 'amount', 'type', 'order_date', 'img', 'price'] + PRODUCT_ATTRIBUTES
+        for key in keys_to_clear:
+            merged_data.pop(key, None)
+
+        # Store the collected keywords for the recommendation node to use
+        # If the list is empty, use a generic fallback keyword
+        merged_data['search_keywords'] = search_keywords if search_keywords else ["similar product"] 
 
     state["relevant_data"] = merged_data
+    print(f"DEBUG: Final relevant_data: {state['relevant_data']}")
     
     return state

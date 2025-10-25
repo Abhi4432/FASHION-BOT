@@ -27,14 +27,17 @@ def recommendation_node(state: Dict[str, Any]) -> Dict[str, Any]:
     
     if not search_keywords:
         # Fallback: Use LLM/Regex to extract keywords
-        context_desc = relevant_data.get('description') or relevant_data.get('name')
-        
+        #context_desc = relevant_data.get('description') or relevant_data.get('name')
+        context_desc = ", ".join(
+            filter(None, [relevant_data.get('colour'), relevant_data.get('brand'), relevant_data.get('name') , relevant_data.get('fabric'), relevant_data.get('print_pattern'), relevant_data.get('top_type'), relevant_data.get('sleeve_length')])
+        )
+        print(f"DEBUG: Context Description for Keyword Extraction: {context_desc}")
         search_prompt = f"""
         The user asked for recommendations: "{user_input}"
-        Context: {context_desc or 'None'}
-        
-        Task: Extract the 3-5 best keywords (color, style, fabric, etc.) for a full-text search.
+        Context: {context_desc or 'None'}el
+        Task: Extract the 3 best keywords (color, style, fabric, etc.) for a full-text search.
         Return ONLY a single JSON object with a list of strings for the 'keywords' field.
+        Give preference to user input terms, but supplement with context if needed.So for colour and other attributes use user given input more.
         """
         
         try:
@@ -111,7 +114,7 @@ def recommendation_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Generate a polite, engaging response presenting this single recommendation.
     - Mention the name, brand, price and a brief description.
     -Mention the image as well and provide url of the image which is there in provided information.
-    -Explicity must provide url of image if available
+    -Explicity must provide url of image if available from the product data provided.
     -Ask user if he wants to buy this product.
     - Do not show the raw SQL data summary.
     """

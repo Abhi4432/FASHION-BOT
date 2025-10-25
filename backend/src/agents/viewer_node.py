@@ -22,8 +22,8 @@ def viewer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return state
 
     # Check if necessary data is already in state (Data Reuse)
-    needs_sql = not any(field in relevant_data for field in ['status', 'delivery_date', 'shipping_date', 'img', 'price'])
-    
+    # needs_sql = not any(field in relevant_data for field in ['status', 'delivery_date', 'shipping_date', 'img', 'price'])
+    needs_sql = True
     sql_result = {}
     if needs_sql:
         # Run SQL lookup (will only fetch if needed)
@@ -34,6 +34,7 @@ def viewer_node(state: Dict[str, Any]) -> Dict[str, Any]:
             state["error_msg"] = sql_result["error"]
             return state
 
+    print(f"VIEWER NODE: SQL Result in Viewer Node: {sql_result}")
     # --- Merge SQL result into relevant data (Update State) ---
     for key, val in sql_result.items():
         if val is not None and str(val).strip() != "":
@@ -44,37 +45,34 @@ def viewer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # --- Generate Natural Response ---
     
     # 1. SPECIAL CASE: Image Request 
-    if ('image' in user_input or 'img' in user_input) and 'img' in relevant_data:
-        img_url = relevant_data['img']
-        # ONLY return the image URL
-        response_content = img_url 
-        state["messages"].append({"role": "viewer_agent", "content": response_content})
-        state["error_msg"] = None
-        return state
+    # if ('image' in user_input or 'img' in user_input) and 'img' in relevant_data:
+    #     img_url = relevant_data['img']
+    #     # ONLY return the image URL
+    #     response_content = img_url 
+    #     state["messages"].append({"role": "viewer_agent", "content": response_content})
+    #     state["error_msg"] = None
+    #     return state
     
     # 2. General Query Response (Use LLM with full context)
-    relevant_data_text = "\n".join([f"{k}: {v}" for k, v in relevant_data.items()]) 
+    # relevant_data_text = "\n".join([f"{k}: {v}" for k, v in relevant_data.items()]) 
+    sql_result_text = "\n".join([f"{k}: {v}" for k, v in sql_result.items()]) 
     
     viewing_prompt = f"""
-    The user asked: "{state.get('latest_input', '')}"
+    The user asked for: "{state.get('latest_input', '')}"
 
     Full Available Context (Use ONLY this information to construct your response):
-    {relevant_data_text}
+    {sql_result_text if sql_result_text else 'No additional data available.'}
 
     Task: Respond concisely and naturally based ONLY on the user's latest query. 
     
     RULES:
-    1. **Conciseness:** Provide the specific requested value (e.g., status, date, price) in one or two short, natural sentences.
+    1. **Conciseness:** Provide the specific requested value (e.g., status, date, price , image) in one or two short, natural sentences.
     2. **Anti-Hallucination:** DO NOT mention any fields that the user did not ask for. DO NOT state that data is unavailable if it is present in the context above.
     3. **Focus:** If the user asks for 'status', give the status. If they ask for 'delivery date', give the delivery date.
 
-    Example: 
-    User: "what is the order status"
-    Response: "Your order is currently {relevant_data.get('status')}."
+    4. **Image Handling:** If the user requests an image, provide ONLY the direct URL to the image without additional text.
 
-    Example:
-    User: "what is the delivery date"
-    Response: "The estimated delivery date is {relevant_data.get('delivery_date')}."
+    First set which field from sql user is asking and then provide the answer accordingly by providing exact value.
     """
 
     llm_response = ollama_model.invoke(viewing_prompt)

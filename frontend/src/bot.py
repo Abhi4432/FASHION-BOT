@@ -19,8 +19,19 @@ def show_bot_page():
 
     # Reset/Logout buttons
     col1, col2 = st.columns([1, 1])
-    # ... (Reset/Logout buttons logic remains the same)
-
+    with col1:
+        if st.button("🔄 Reset Conversation"):
+            st.session_state.messages = []
+            st.session_state.relevant_data = {} 
+            st.success("Conversation reset.")
+            st.rerun() # Ensure full script rerun to clear chat area immediately
+    with col2:
+        if st.button("🚪 Logout"):
+            st.session_state.logged_in = False
+            st.session_state.user_id = None
+            st.session_state.messages = []
+            st.session_state.relevant_data = {}
+            st.rerun()
     # ------------------------------------------------------------------
     # CHAT INPUT: Wrapped in a form to enable Enter key submission
     # ------------------------------------------------------------------
